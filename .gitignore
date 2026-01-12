@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ChromaDB
+chroma_db/
+*.sqlite3
+
+# Deprecated folders (to be removed)
+paper_brain/
+2_paper_rag/
+2_single_rag/
+arxiv_api/
+run_paper_brain.py
+1_main_db/
+0random/
+
+# Logs
+*.log

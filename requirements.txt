@@ -1,0 +1,16 @@
+pypdf 
+langchain_text_splitters 
+chromadb 
+sentence_transformers
+numpy<2
+pandas
+google-generativeai
+sentence-transformers[cross-encoder]
+python-dotenv
+requests
+feedparser
+llama-index
+llama-index-retrievers-bm25
+llama-index-embeddings-google-genai 
+llama-index-llms-google-genai
+langchain
