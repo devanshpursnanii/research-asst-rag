@@ -2,7 +2,7 @@
 
 Intelligent arXiv paper discovery and multi-paper RAG system with agent-based interaction.
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 project_physics/
