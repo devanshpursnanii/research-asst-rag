@@ -124,6 +124,33 @@ class SessionInfoResponse(BaseModel):
     error: Optional[str] = None
 
 
+class MetricsRequest(BaseModel):
+    """Single request in metrics view."""
+    request_id: str
+    query: str
+    prompt_tokens: int
+    total_chunk_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    llm_latency_ms: float
+    total_latency_ms: float
+    operation_type: str
+    status: str
+    created_at: str
+    chunks: List[Dict[str, Any]]
+
+
+class MetricsResponse(BaseModel):
+    """Response with session metrics from SQLite database."""
+    session_id: str
+    total_requests: int
+    total_tokens: int
+    avg_llm_latency: float
+    avg_total_latency: float
+    requests: List[MetricsRequest]
+    error: Optional[str] = None
+
+
 class ErrorResponse(BaseModel):
     """Error response."""
     error: str

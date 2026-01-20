@@ -17,7 +17,7 @@ from llama_index.core import VectorStoreIndex
 import os
 from .api_config import get_brain_llm, get_chat_llm, QuotaExhaustedError
 from .fetcher import ingest_arxiv_paper
-from .rag import multi_paper_rag_with_documents
+from .rag import multi_paper_rag_with_documents, multi_paper_rag_with_documents_with_metrics
 from .logger import SessionLogger
 
 
@@ -300,15 +300,18 @@ async def web_chat_query(query: str, documents: List[Document], logger: Optional
         
     Returns:
         {
-            "thinking_steps": [
-                {"step": "routing", "status": "complete", "result": "qa engine selected"},
-                {"step": "retrieving", "status": "complete", "result": "5 chunks retrieved"},
-                {"step": "generating", "status": "complete", "result": "answer generated"}
-            ],
+            "thinking_steps": [...],
             "answer": "...",
-            "citations": [
-                {"paper": "Paper Title", "page": 5}
-            ],
+            "citations": [...],
+            "metrics": {
+                "query": str,
+                "prompt_tokens": int,
+                "total_chunk_tokens": int,
+                "completion_tokens": int,
+                "llm_latency_ms": float,
+                "total_latency_ms": float,
+                "chunks": [...]
+            },
             "error": None
         }
     """
@@ -320,6 +323,7 @@ async def web_chat_query(query: str, documents: List[Document], logger: Optional
                 "thinking_steps": [],
                 "answer": "",
                 "citations": [],
+                "metrics": None,
                 "error": "No papers loaded. Please load papers first."
             }
         
@@ -328,22 +332,42 @@ async def web_chat_query(query: str, documents: List[Document], logger: Optional
         
         # Call RAG function in thread pool to avoid event loop conflicts
         start_time = time.time()
-        response = await asyncio.to_thread(multi_paper_rag_with_documents, documents, query, logger)
-        latency_ms = (time.time() - start_time) * 1000
+        rag_result = await asyncio.to_thread(multi_paper_rag_with_documents_with_metrics, documents, query, logger)
+        total_latency_ms = (time.time() - start_time) * 1000
         
         thinking_steps[-1] = {"step": "routing", "status": "complete", "result": "query routed"}
         thinking_steps.append({"step": "generating", "status": "complete", "result": "answer generated"})
         
-        # Extract citations from response
+        # Extract citations from response - handle multiple formats
         import re
-        citations_raw = re.findall(r'\[([^,]+), Page (\d+)\]', str(response))
-        citations = [{"paper": paper, "page": int(page)} for paper, page in citations_raw]
+        response_text = str(rag_result['response'])
+        
+        # Try standard format: [Paper Title, Page X]
+        citations_raw = re.findall(r'\[([^,\]]+),\s*Page\s+(\d+)\]', response_text, re.IGNORECASE)
+        
+        # Also try without "Page" prefix: [Paper Title, 5]
+        if not citations_raw:
+            citations_raw = re.findall(r'\[([^,\]]+),\s*(\d+)\]', response_text)
+        
+        citations = [{"paper": paper.strip(), "page": int(page)} for paper, page in citations_raw]
         unique_citations = list({f"{c['paper']}-{c['page']}": c for c in citations}.values())
+        
+        # Build metrics dict
+        from .metrics_collector import collect_request_metrics
+        metrics = collect_request_metrics(
+            query=query,
+            answer=str(rag_result['response']),
+            chunks=rag_result['chunks'],
+            total_chunk_tokens=rag_result['total_chunk_tokens'],
+            llm_latency_ms=rag_result['llm_latency_ms'],
+            total_latency_ms=total_latency_ms
+        )
         
         return {
             "thinking_steps": thinking_steps,
-            "answer": str(response),
+            "answer": str(rag_result['response']),
             "citations": unique_citations,
+            "metrics": metrics,
             "error": None
         }
         
@@ -352,6 +376,7 @@ async def web_chat_query(query: str, documents: List[Document], logger: Optional
             "thinking_steps": thinking_steps,
             "answer": "",
             "citations": [],
+            "metrics": None,
             "error": f"quota_exhausted: {e.message}"
         }
     except Exception as e:
@@ -359,5 +384,6 @@ async def web_chat_query(query: str, documents: List[Document], logger: Optional
             "thinking_steps": thinking_steps,
             "answer": "",
             "citations": [],
+            "metrics": None,
             "error": f"error: {str(e)}"
         }

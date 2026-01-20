@@ -15,6 +15,8 @@ from fastapi.responses import JSONResponse
 import sys
 import os
 from datetime import datetime
+import asyncio
+from pathlib import Path
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,7 +27,8 @@ from backend.models import (
     BrainLoadRequest, BrainLoadResponse,
     ChatMessageRequest, ChatMessageResponse,
     SessionInfoResponse, ErrorResponse,
-    ThinkingStep, Paper, Citation, QuotaStatus, SessionInfo
+    ThinkingStep, Paper, Citation, QuotaStatus, SessionInfo,
+    MetricsResponse, MetricsRequest
 )
 from backend.session import (
     create_session, get_session, cleanup_old_sessions,
@@ -33,6 +36,35 @@ from backend.session import (
 )
 from ai.web_interface import web_brain_search, web_brain_load_papers, web_chat_query
 from ai.api_config import QuotaExhaustedError
+
+
+# ==================
+# DB INITIALIZATION
+# ==================
+
+def bootstrap_database():
+    """Initialize database if it doesn't exist."""
+    from backend.db.connection import DB_PATH, get_connection
+    from pathlib import Path
+    
+    if not DB_PATH.exists():
+        print("📊 Database not found. Creating logs.db...")
+        
+        # Read schema
+        schema_path = Path(__file__).parent / "db" / "schema.sql"
+        with open(schema_path, 'r') as f:
+            schema_sql = f.read()
+        
+        # Create database and execute schema
+        conn = get_connection()
+        try:
+            conn.executescript(schema_sql)
+            conn.commit()
+            print("✅ Database initialized successfully")
+        finally:
+            conn.close()
+    else:
+        print("✅ Database already exists at", DB_PATH)
 
 
 # ==================
@@ -44,6 +76,12 @@ app = FastAPI(
     description="Research paper discovery and RAG chat API",
     version="1.0.0"
 )
+
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    """Run startup tasks."""
+    bootstrap_database()
 
 # CORS Configuration for Next.js frontend
 app.add_middleware(
@@ -66,6 +104,44 @@ app.add_middleware(
 # ENDPOINTS
 # ==================
 
+async def log_chat_metrics_async(session_id: str, metrics: dict):
+    """
+    Asynchronously log chat metrics to database.
+    This runs after the response is sent to the user.
+    """
+    try:
+        from backend.db import repository
+        from ai.metrics_collector import generate_request_id
+        
+        # Generate request ID
+        request_id = generate_request_id()
+        
+        # Build request data
+        request_data = {
+            'request_id': request_id,
+            'session_id': session_id,
+            'query': metrics['query'],
+            'prompt_tokens': metrics['prompt_tokens'],
+            'total_chunk_tokens': metrics['total_chunk_tokens'],
+            'completion_tokens': metrics['completion_tokens'],
+            'llm_latency_ms': metrics['llm_latency_ms'],
+            'total_latency_ms': metrics['total_latency_ms'],
+            'operation_type': 'chat_message',
+            'status': 'success'
+        }
+        
+        # Insert request
+        await asyncio.to_thread(repository.insert_request, request_data)
+        
+        # Insert chunks
+        await asyncio.to_thread(repository.insert_chunks, request_id, metrics['chunks'])
+        
+        print(f"✓ Metrics logged for request {request_id[:8]}...")
+    except Exception as e:
+        # Log error but don't raise (logging failure shouldn't break the app)
+        print(f"⚠️  Failed to log metrics: {e}")
+
+
 @app.post("/session/create", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_new_session(request: CreateSessionRequest):
     """
@@ -77,6 +153,10 @@ async def create_new_session(request: CreateSessionRequest):
     """
     try:
         session = create_session(initial_query=request.initial_query)
+        
+        # Log session creation to database
+        from backend.db import repository
+        repository.create_session(session.session_id, session.created_at)
         
         return CreateSessionResponse(
             session_id=session.session_id,
@@ -307,8 +387,23 @@ async def chat_message(request: ChatMessageRequest):
             "timestamp": datetime.now().isoformat()
         })
         
-        # Strip markdown formatting
-        clean_answer = result["answer"].replace("**", "")
+        # Clean markdown formatting
+        import re
+        clean_answer = result["answer"]
+        # Remove markdown headers
+        clean_answer = re.sub(r'^#{1,6}\s+', '', clean_answer, flags=re.MULTILINE)
+        # Remove bold/italic markers
+        clean_answer = clean_answer.replace("**", "").replace("__", "")
+        clean_answer = re.sub(r'(?<!\*)\*(?!\*)', '', clean_answer)  # Remove single asterisks
+        # Clean up bullet points - replace * with •
+        clean_answer = re.sub(r'^\s*\*\s+', '• ', clean_answer, flags=re.MULTILINE)
+        
+        # Log to database asynchronously (don't block response)
+        if result.get("metrics"):
+            asyncio.create_task(log_chat_metrics_async(
+                session_id=request.session_id,
+                metrics=result["metrics"]
+            ))
         
         return ChatMessageResponse(
             thinking_steps=[ThinkingStep(**step) for step in result["thinking_steps"]],
@@ -390,6 +485,77 @@ async def get_session_info(session_id: str):
             ),
             logs_summary={},
             error=f"Internal error: {str(e)}"
+        )
+
+
+@app.get("/metrics/{session_id}", response_model=MetricsResponse)
+async def get_session_metrics(session_id: str):
+    """
+    Get session metrics from SQLite database.
+    
+    - **session_id**: Session UUID
+    
+    Returns aggregated metrics and detailed request/chunk data.
+    """
+    from backend.db.repository import (
+        get_requests_by_session, 
+        get_chunks_by_request,
+        get_session_metrics
+    )
+    
+    try:
+        # Get aggregated metrics
+        metrics = get_session_metrics(session_id)
+        
+        # Get all requests for this session
+        requests = get_requests_by_session(session_id)
+        
+        # Get chunks for each request
+        requests_with_chunks = []
+        for req in requests:
+            chunks = get_chunks_by_request(req['request_id'])
+            
+            # Calculate total tokens for this request
+            total_tokens = (
+                req['prompt_tokens'] + 
+                req['total_chunk_tokens'] + 
+                req['completion_tokens']
+            )
+            
+            requests_with_chunks.append(MetricsRequest(
+                request_id=req['request_id'],
+                query=req['query'],
+                prompt_tokens=req['prompt_tokens'],
+                total_chunk_tokens=req['total_chunk_tokens'],
+                completion_tokens=req['completion_tokens'],
+                total_tokens=total_tokens,
+                llm_latency_ms=req['llm_latency_ms'],
+                total_latency_ms=req['total_latency_ms'],
+                operation_type=req['operation_type'],
+                status=req['status'],
+                created_at=req['created_at'],
+                chunks=chunks
+            ))
+        
+        return MetricsResponse(
+            session_id=session_id,
+            total_requests=metrics.get('total_requests', 0) or 0,
+            total_tokens=metrics.get('total_tokens', 0) or 0,
+            avg_llm_latency=metrics.get('avg_llm_latency', 0.0) or 0.0,
+            avg_total_latency=metrics.get('avg_total_latency', 0.0) or 0.0,
+            requests=requests_with_chunks,
+            error=None
+        )
+        
+    except Exception as e:
+        return MetricsResponse(
+            session_id=session_id,
+            total_requests=0,
+            total_tokens=0,
+            avg_llm_latency=0.0,
+            avg_total_latency=0.0,
+            requests=[],
+            error=f"Failed to fetch metrics: {str(e)}"
         )
 
 

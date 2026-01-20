@@ -25,7 +25,6 @@ export default function Header() {
             <Github className="h-4 w-4" />
             <span>GitHub</span>
           </a>
-          {/* Logs link temporarily hidden
           <a
             href="/logs"
             className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
@@ -33,7 +32,6 @@ export default function Header() {
             <ScrollText className="h-4 w-4" />
             <span>Logs</span>
           </a>
-          */}
           <a
             href="/about"
             className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"

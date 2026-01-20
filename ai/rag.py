@@ -9,7 +9,7 @@ Architecture:
 5. Token compression for optimal context
 """
 
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import numpy as np
 import time
 import asyncio
@@ -444,3 +444,106 @@ def multi_paper_rag_with_documents(documents: List[Document], query: str, logger
         print(f"📚 Papers: {', '.join(citation_stats['papers'][:3])}..." if len(citation_stats['papers']) > 3 else f"📚 Papers: {', '.join(citation_stats['papers'])}")
     
     return response
+
+
+def multi_paper_rag_with_documents_with_metrics(documents: List[Document], query: str, logger: Optional[SessionLogger] = None) -> Dict[str, Any]:
+    """
+    Multi-paper RAG that returns both response and metrics for DB logging.
+    
+    Args:
+        documents: Already loaded Document objects
+        query: User query
+        logger: Optional session logger
+    
+    Returns:
+        Dict with:
+            - response: LLM response
+            - chunks: List of chunk metrics
+            - total_chunk_tokens: Total tokens in all chunks
+            - llm_latency_ms: LLM inference latency
+    """
+    from .metrics_collector import collect_chunk_metrics
+    
+    # Configure settings
+    configure_settings()
+    
+    # Build unified index from documents
+    index = VectorStoreIndex.from_documents(documents)
+    
+    # Create router with modified retriever that tracks chunks
+    router = create_router_engine_with_metrics(index, logger)
+    
+    # Query with timing
+    llm_start = time.time()
+    response = router.query(query)
+    llm_latency_ms = (time.time() - llm_start) * 1000
+    
+    # Get retrieved chunks from response source nodes
+    retrieved_nodes = response.source_nodes if hasattr(response, 'source_nodes') else []
+    chunks, total_chunk_tokens = collect_chunk_metrics(retrieved_nodes)
+    
+    return {
+        'response': response,
+        'chunks': chunks,
+        'total_chunk_tokens': total_chunk_tokens,
+        'llm_latency_ms': llm_latency_ms
+    }
+
+
+def create_router_engine_with_metrics(index: VectorStoreIndex, logger: Optional[SessionLogger] = None) -> RouterQueryEngine:
+    """Create router that preserves source nodes for metrics."""
+    prompts = get_task_prompts()
+    
+    # Create task-specific engines (same as before)
+    qa_engine = create_qa_engine(index, prompts, logger)
+    summarize_engine = create_summarize_engine(index, prompts, logger)
+    compare_engine = create_compare_engine(index, prompts, logger)
+    explain_engine = create_explain_engine(index, prompts, logger)
+    
+    # Wrap in QueryEngineTool with descriptions
+    tools = [
+        QueryEngineTool.from_defaults(
+            query_engine=qa_engine,
+            name="qa",
+            description=(
+                "Use for direct questions requiring precise, factual answers. "
+                "Examples: 'What is the learning rate?', 'Which optimizer was used?', "
+                "'What datasets were evaluated?'"
+            )
+        ),
+        QueryEngineTool.from_defaults(
+            query_engine=summarize_engine,
+            name="summarize",
+            description=(
+                "Use for requests to summarize or provide overview of papers, methods, or findings. "
+                "Examples: 'Summarize the main contributions', 'Give an overview of the approach', "
+                "'What are the key findings?'"
+            )
+        ),
+        QueryEngineTool.from_defaults(
+            query_engine=compare_engine,
+            name="compare",
+            description=(
+                "Use for comparing concepts, methods, or approaches across multiple papers. "
+                "Examples: 'Compare X and Y', 'What are the differences between...', "
+                "'How do these papers approach...'"
+            )
+        ),
+        QueryEngineTool.from_defaults(
+            query_engine=explain_engine,
+            name="explain",
+            description=(
+                "Use for requests to explain concepts, mechanisms, or how something works. "
+                "Examples: 'Explain how X works', 'How does Y mechanism function?', "
+                "'Walk me through the process of...'"
+            )
+        )
+    ]
+    
+    # Create router
+    router_llm = get_chat_llm(temperature=0.1)
+    return RouterQueryEngine(
+        selector=LLMSingleSelector.from_defaults(llm=router_llm),
+        query_engine_tools=tools,
+        verbose=True
+    )
