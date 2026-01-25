@@ -16,6 +16,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import sys
 import os
 from datetime import datetime
@@ -25,6 +28,9 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -136,11 +142,16 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Add rate limiter to app state
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Initialize database on startup
 @app.on_event("startup")
 async def startup_event():
     """Run startup tasks."""
     bootstrap_database()
+    print("✓ FastAPI started. Cleaned up old sessions.")
 
 # CORS Configuration for Next.js frontend
 app.add_middleware(
@@ -149,9 +160,12 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:3001",
         "http://127.0.0.1:3000",
-        "http://192.168.0.104:3000",  # Added for local network
+        "http://192.168.0.104:3000",  # Local network
         "http://192.168.0.106:3000",
-        "http://192.168.0.107:3000"
+        "http://192.168.0.107:3000",
+        "https://paperstack.vercel.app",  # Production frontend
+        "https://*.vercel.app",  # Preview deployments
+        "https://paperstack-production.up.railway.app",  # If using Railway
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
@@ -169,7 +183,7 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
     
     # Skip auth check for these paths
-    if request.url.path in ["/auth/validate", "/", "/docs", "/openapi.json", "/redoc"]:
+    if request.url.path in ["/auth/validate", "/", "/health", "/docs", "/openapi.json", "/redoc"]:
         return await call_next(request)
     
     # Check Authorization header
@@ -194,6 +208,42 @@ async def auth_middleware(request: Request, call_next):
 # ==================
 # AUTHENTICATION ENDPOINT
 # ==================
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring services."""
+    from backend.db.connection import get_connection, DATABASE_TYPE
+    
+    health_status = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "database_type": DATABASE_TYPE,
+        "database": "disconnected",
+        "api_keys": "not_checked",
+        "sessions": get_session_count()
+    }
+    
+    # Check database connection
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+        conn.close()
+        health_status["database"] = "connected"
+    except Exception as e:
+        health_status["status"] = "degraded"
+        health_status["database"] = f"error: {str(e)[:50]}"
+    
+    # Check API keys exist
+    if os.getenv("GOOGLE_API_KEY1") and os.getenv("GOOGLE_API_KEY2"):
+        health_status["api_keys"] = "configured"
+    else:
+        health_status["status"] = "degraded"
+        health_status["api_keys"] = "missing"
+    
+    return health_status
+
 
 @app.post("/auth/validate", response_model=AuthResponse)
 async def validate_token(request: AuthRequest):
@@ -280,7 +330,8 @@ async def create_new_session(request: CreateSessionRequest):
 
 
 @app.post("/brain/search", response_model=BrainSearchResponse)
-async def brain_search(request: BrainSearchRequest):
+@limiter.limit("10/minute")
+async def brain_search(request: Request, brain_request: BrainSearchRequest):
     """
     Search arXiv papers with Paper Brain.
     
@@ -290,7 +341,7 @@ async def brain_search(request: BrainSearchRequest):
     Returns thinking steps, ranked papers, and remaining searches.
     """
     # Get session
-    session = get_session(request.session_id)
+    session = get_session(brain_request.session_id)
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -363,7 +414,8 @@ async def brain_search(request: BrainSearchRequest):
 
 
 @app.post("/brain/load", response_model=BrainLoadResponse)
-async def brain_load(request: BrainLoadRequest):
+@limiter.limit("5/minute")
+async def brain_load(request: Request, load_request: BrainLoadRequest):
     """
     Load selected papers for RAG.
     
@@ -373,7 +425,7 @@ async def brain_load(request: BrainLoadRequest):
     Returns loading status and paper titles.
     """
     # Get session
-    session = get_session(request.session_id)
+    session = get_session(load_request.session_id)
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -384,11 +436,11 @@ async def brain_load(request: BrainLoadRequest):
     try:
         # Add initial status
         thinking_steps = [
-            {"step_number": 1, "description": f"Downloading {len(request.paper_ids)} papers from arXiv..."},
+            {"step_number": 1, "description": f"Downloading {len(load_request.paper_ids)} papers from arXiv..."},
             {"step_number": 2, "description": "Extracting text and building index..."},
         ]
         
-        result = await web_brain_load_papers(request.paper_ids, logger=session.logger)
+        result = await web_brain_load_papers(load_request.paper_ids, logger=session.logger)
         
         if result.get("error"):
             return BrainLoadResponse(
@@ -420,7 +472,8 @@ async def brain_load(request: BrainLoadRequest):
 
 
 @app.post("/chat/message", response_model=ChatMessageResponse)
-async def chat_message(request: ChatMessageRequest):
+@limiter.limit("20/minute")  # 20 messages per minute per IP
+async def send_message(request: Request, chat_request: ChatMessageRequest):
     """
     Send a message to Paper Chat.
     
@@ -430,7 +483,7 @@ async def chat_message(request: ChatMessageRequest):
     Returns answer with citations and remaining messages.
     """
     # Get session
-    session = get_session(request.session_id)
+    session = get_session(chat_request.session_id)
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -459,7 +512,7 @@ async def chat_message(request: ChatMessageRequest):
     # Query RAG
     try:
         result = await web_chat_query(
-            request.message,
+            chat_request.message,
             session.loaded_documents,
             logger=session.logger
         )
