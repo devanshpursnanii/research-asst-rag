@@ -245,6 +245,12 @@ async def health_check():
     return health_status
 
 
+@app.options("/auth/validate")
+async def auth_validate_options():
+    """Handle CORS preflight for auth validation."""
+    return JSONResponse(content={"status": "ok"})
+
+
 @app.post("/auth/validate", response_model=AuthResponse)
 async def validate_token(request: AuthRequest):
     """
