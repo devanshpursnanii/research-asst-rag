@@ -33,10 +33,9 @@ function handleUnauthorized() {
 async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
   try {
     const token = getToken();
-    const headers: HeadersInit = {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      ...options?.headers,
     };
 
     // Add Authorization header if token exists
@@ -44,11 +43,17 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> 
       headers['Authorization'] = `Bearer ${token}`;
     }
 
+    // Merge with any additional headers from options
+    const finalHeaders = {
+      ...headers,
+      ...(options?.headers as Record<string, string> || {}),
+    };
+
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
       ...options,
       mode: 'cors',
       credentials: 'include',
-      headers,
+      headers: finalHeaders,
     });
 
     // Handle 401 Unauthorized
