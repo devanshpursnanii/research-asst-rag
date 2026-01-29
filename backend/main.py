@@ -171,7 +171,7 @@ app.add_middleware(
         "http://192.168.0.106:3000",
         "http://192.168.0.107:3000",
         "https://paperstack.vercel.app",  # Production frontend
-        "https://*.vercel.app",  # Preview deployments
+        "https://paperstack-roan.vercel.app",  # Actual Vercel deployment
         "https://paperstack-production.up.railway.app",  # If using Railway
     ],
     allow_credentials=True,
