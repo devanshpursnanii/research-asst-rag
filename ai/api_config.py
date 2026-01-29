@@ -10,7 +10,7 @@ Fallback: KEY2 → KEY1 → raise QuotaExhaustedError
 
 import os
 from typing import Callable, Any
-from llama_index.llms.google_genai import GoogleGenAI
+from llama_index.llms.gemini import Gemini
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -24,7 +24,7 @@ class QuotaExhaustedError(Exception):
         super().__init__(self.message)
 
 
-def get_brain_llm(temperature: float = 0.1) -> GoogleGenAI:
+def get_brain_llm(temperature: float = 0.1) -> Gemini:
     """
     Get LLM for Paper Brain (uses GOOGLE_API_KEY2 - Personal account).
     
@@ -32,20 +32,20 @@ def get_brain_llm(temperature: float = 0.1) -> GoogleGenAI:
         temperature: Model temperature
         
     Returns:
-        GoogleGenAI instance configured with KEY2
+        Gemini instance configured with KEY2
     """
     api_key = os.getenv("GOOGLE_API_KEY2")
     if not api_key:
         raise ValueError("GOOGLE_API_KEY2 not found in environment variables")
     
-    return GoogleGenAI(
+    return Gemini(
         model="models/gemini-2.5-flash-lite",
         api_key=api_key,
         temperature=temperature
     )
 
 
-def get_chat_llm(temperature: float = 0.7) -> GoogleGenAI:
+def get_chat_llm(temperature: float = 0.7) -> Gemini:
     """
     Get LLM for Paper Chat (uses GOOGLE_API_KEY1 - Spit account).
     
@@ -53,13 +53,13 @@ def get_chat_llm(temperature: float = 0.7) -> GoogleGenAI:
         temperature: Model temperature
         
     Returns:
-        GoogleGenAI instance configured with KEY1
+        Gemini instance configured with KEY1
     """
     api_key = os.getenv("GOOGLE_API_KEY1")
     if not api_key:
         raise ValueError("GOOGLE_API_KEY1 not found in environment variables")
     
-    return GoogleGenAI(
+    return Gemini(
         model="models/gemini-2.5-flash-lite",
         api_key=api_key,
         temperature=temperature
@@ -67,8 +67,8 @@ def get_chat_llm(temperature: float = 0.7) -> GoogleGenAI:
 
 
 async def try_with_fallback(
-    primary_llm: GoogleGenAI,
-    fallback_llm: GoogleGenAI,
+    primary_llm: Gemini,
+    fallback_llm: Gemini,
     operation: Callable,
     *args,
     **kwargs

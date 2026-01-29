@@ -18,7 +18,7 @@ from llama_index.core.schema import NodeWithScore
 from llama_index.core.query_engine import RetrieverQueryEngine, RouterQueryEngine
 from llama_index.core.tools import QueryEngineTool
 from llama_index.core.selectors import LLMSingleSelector
-from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+from llama_index.embeddings.gemini import GeminiEmbedding
 from dotenv import load_dotenv
 import re
 from .retrieval import configure_settings, create_hybrid_retriever, enhance_query_for_rag, llm_rerank_chunks
@@ -131,7 +131,7 @@ class TaskSpecificRetriever:
         
         # Create query-specific embedding model
         embedding_config = get_embedding_model()
-        query_embed_model = GoogleGenAIEmbedding(
+        query_embed_model = GeminiEmbedding(
             model_name=embedding_config["model_name"],
             api_key=embedding_config["api_key"],
             task_type="RETRIEVAL_QUERY"  # For query embeddings

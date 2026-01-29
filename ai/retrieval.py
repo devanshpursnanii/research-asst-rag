@@ -2,9 +2,9 @@
 
 from typing import List, Optional
 from llama_index.core import VectorStoreIndex, Settings, PromptTemplate, Document
-from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+from llama_index.embeddings.gemini import GeminiEmbedding
 from llama_index.core.retrievers import QueryFusionRetriever
-from llama_index.retrievers.bm25 import BM25Retriever
+from llama_index.core.retrievers import BM25Retriever
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.schema import NodeWithScore
 from dotenv import load_dotenv
@@ -20,7 +20,7 @@ def configure_settings(llm=None):
         llm = get_chat_llm(temperature=0.1)
     
     embedding_config = get_embedding_model()
-    embed_model = GoogleGenAIEmbedding(
+    embed_model = GeminiEmbedding(
         model_name=embedding_config["model_name"],
         api_key=embedding_config["api_key"],
         task_type="RETRIEVAL_DOCUMENT"  # For indexing documents
