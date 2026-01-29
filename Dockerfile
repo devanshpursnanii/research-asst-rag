@@ -11,13 +11,9 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy root requirements first (for Docker layer caching)
+# Copy root requirements and install (single source of truth)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy backend requirements and install
-COPY backend/requirements.txt backend/requirements.txt
-RUN pip install --no-cache-dir -r backend/requirements.txt
 
 # Copy application code
 COPY . .
