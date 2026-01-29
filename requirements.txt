@@ -1,38 +1,36 @@
 # Core Framework
-fastapi==0.120.0
-uvicorn[standard]==0.32.0
-pydantic==2.9.2
+fastapi>=0.115.0,<0.121.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.8.0,<3.0.0
 
-# LlamaIndex RAG
-llama-index==0.14.12
-llama-index-core==0.14.12
-llama-index-embeddings-google-genai==0.3.1
+# LlamaIndex RAG - install base package first, it will pull in compatible sub-packages
+llama-index>=0.11.0,<0.15.0
 
 # Google AI
-google-generativeai==0.8.5
+google-generativeai>=0.7.0,<0.9.0
 
 # Vector Store & Embeddings
-chromadb==1.1.1
-sentence-transformers==3.3.1
+chromadb>=1.0.0,<2.0.0
+sentence-transformers>=3.0.0
 
 # PDF Processing
-pypdf==5.1.0
+pypdf>=5.0.0
 
 # Text Processing
-langchain==0.3.27
-langchain-text-splitters==0.3.11
+langchain>=0.3.0
+langchain-text-splitters>=0.3.0
 
 # Utilities
-python-dotenv==1.0.1
-requests==2.32.3
-feedparser==6.0.11
-tiktoken==0.8.0
-pandas==2.2.3
-numpy<2.0.0
-psycopg2-binary==2.9.10
+python-dotenv>=1.0.0
+requests>=2.31.0
+feedparser>=6.0.0
+tiktoken>=0.7.0
+pandas>=2.2.0
+numpy>=1.24.0,<2.0.0
+psycopg2-binary>=2.9.0
 
 # Rate Limiting
-slowapi==0.1.9
+slowapi>=0.1.9
 
 # Production Server
-gunicorn==21.2.0
+gunicorn>=21.0.0
