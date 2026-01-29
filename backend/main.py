@@ -143,23 +143,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add rate limiter to app state
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-# Initialize database and cleanup old sessions on startup
-@app.on_event("startup")
-async def startup_event():
-    """Run startup tasks: initialize database and cleanup old sessions."""
-    try:
-        bootstrap_database()
-        deleted = cleanup_old_sessions(max_age_hours=48)
-        print(f"✓ FastAPI started successfully. Cleaned up {deleted} old sessions.")
-    except Exception as e:
-        print(f"⚠️  Startup warning: {e}")
-        # Don't crash on startup - allow app to start even if cleanup fails
-
-# CORS Configuration for Next.js frontend
+# CORS Configuration for Next.js frontend - MUST be first middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -181,18 +165,37 @@ app.add_middleware(
     max_age=3600,
 )
 
+# Add rate limiter to app state
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Initialize database and cleanup old sessions on startup
+@app.on_event("startup")
+async def startup_event():
+    """Run startup tasks: initialize database and cleanup old sessions."""
+    try:
+        bootstrap_database()
+        deleted = cleanup_old_sessions(max_age_hours=48)
+        print(f"✓ FastAPI started successfully. Cleaned up {deleted} old sessions.")
+    except Exception as e:
+        print(f"⚠️  Startup warning: {e}")
+        # Don't crash on startup - allow app to start even if cleanup fails
+
 # Authentication Middleware
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     """Check authentication for all routes except /auth/validate and OPTIONS requests."""
-    # CRITICAL: Skip OPTIONS requests (CORS preflight) - must be first
+    # Let CORSMiddleware handle OPTIONS requests - don't interfere
     if request.method == "OPTIONS":
-        response = await call_next(request)
-        return response
+        return await call_next(request)
     
     # Skip auth check for these paths
     if request.url.path in ["/auth/validate", "/", "/health", "/docs", "/openapi.json", "/redoc"]:
-        return await call_next(request)
+        response = await call_next(request)
+        # Debug CORS headers on auth endpoints
+        if request.url.path == "/auth/validate":
+            print(f"[CORS DEBUG] /auth/validate response headers: {dict(response.headers)}")
+        return response
     
     # Check Authorization header
     auth_header = request.headers.get("Authorization")
@@ -251,21 +254,6 @@ async def health_check():
         health_status["api_keys"] = "missing"
     
     return health_status
-
-
-@app.options("/auth/validate")
-async def auth_validate_options():
-    """Handle CORS preflight for auth validation."""
-    from fastapi.responses import Response
-    return Response(
-        status_code=200,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Access-Control-Max-Age": "3600",
-        }
-    )
 
 
 @app.post("/auth/validate", response_model=AuthResponse)
