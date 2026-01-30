@@ -68,7 +68,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
     while (retryCount <= maxRetries) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), 20000); // 20 second timeout for Render cold starts
 
         const response = await fetch(`${API_BASE_URL}/auth/validate`, {
           method: 'POST',
