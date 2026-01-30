@@ -125,26 +125,30 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   };
 
   const searchPapers = async (query: string, searchMode: 'title' | 'topic' = 'topic') => {
-    // Auto-create session if it doesn't exist
-    if (!sessionId) {
-      try {
-        await createSession('Research session');
-      } catch (err) {
-        setError('Failed to create session');
-        return;
-      }
-    }
-
-    // Session should exist now (either from before or just created)
-    const currentSessionId = sessionId || localStorage.getItem('paperstack_session_id');
-    if (!currentSessionId) {
-      setError('Failed to initialize session');
-      return;
-    }
-
     try {
       setLoading(true);
       setError(null);
+      
+      // Auto-create session if it doesn't exist
+      let currentSessionId = sessionId;
+      if (!currentSessionId) {
+        const response = await api.createSession('Research session');
+        if (response.error) {
+          setError(response.error);
+          return;
+        }
+        currentSessionId = response.session_id;
+        setSessionId(currentSessionId);
+        setMessages([]);
+        setPapers([]);
+        setSelectedPaperIds([]);
+      }
+
+      if (!currentSessionId) {
+        setError('Failed to initialize session');
+        return;
+      }
+
       const response = await api.searchPapers(currentSessionId, query, searchMode);
       
       if (response.error) {
