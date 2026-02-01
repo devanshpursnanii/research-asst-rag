@@ -23,6 +23,7 @@ interface SessionContextType {
   refreshSessionInfo: () => Promise<void>;
   clearError: () => void;
   clearPapers: () => void;
+  clearChat: () => void;
   resetSession: () => Promise<void>;
 }
 
@@ -60,37 +61,37 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, [sessionId, messages]);
 
-  // Load session data on mount ONLY if we have both sessionId and token
-  // This runs after AuthGuard has validated the token
+  // Restore session data on mount
   useEffect(() => {
-    const initializeSession = async () => {
-      if (!sessionId || typeof window === 'undefined') return;
-      
-      const token = localStorage.getItem('paperstack_token');
-      if (!token) return; // No token means not authenticated yet
-      
+    if (typeof window === 'undefined' || !sessionId) return;
+    
+    const restoreSession = async () => {
       // Restore messages from localStorage
       const savedMessages = localStorage.getItem(`paperstack_messages_${sessionId}`);
       if (savedMessages) {
         try {
           setMessages(JSON.parse(savedMessages));
         } catch (e) {
-          console.error('Failed to restore messages:', e);
+          console.error('Failed to parse saved messages:', e);
         }
       }
-      
-      // Try to refresh session info (might fail if session expired)
+
+      // Fetch fresh session info from backend (loaded papers, quota, etc.)
       try {
         await refreshSessionInfo();
       } catch (err) {
-        // Session doesn't exist anymore, that's okay
-        console.log('Could not restore session, will create new one');
+        // Session expired or invalid - clear it but keep auth token
+        console.log('Session not found on backend, clearing stale sessionId');
+        localStorage.removeItem('paperstack_session_id');
+        localStorage.removeItem(`paperstack_messages_${sessionId}`);
+        setSessionId(null);
+        setMessages([]);
+        setPapers([]);
+        setSelectedPaperIds([]);
       }
     };
-    
-    // Small delay to ensure AuthGuard has finished validating
-    const timeoutId = setTimeout(initializeSession, 100);
-    return () => clearTimeout(timeoutId);
+
+    restoreSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run once on mount
 
@@ -129,19 +130,27 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setLoading(true);
       setError(null);
       
-      // Auto-create session if it doesn't exist
+      // Auto-create session if it doesn't exist (lazy creation)
       let currentSessionId = sessionId;
       if (!currentSessionId) {
-        const response = await api.createSession('Research session');
-        if (response.error) {
-          setError(response.error);
-          return;
+        try {
+          const response = await api.createSession('Research session');
+          if (response.error) {
+            setError(response.error);
+            return;
+          }
+          currentSessionId = response.session_id;
+          setSessionId(currentSessionId);
+          setMessages([]);
+          setPapers([]);
+          setSelectedPaperIds([]);
+        } catch (err) {
+          // Silently handle AbortErrors (user navigated away quickly)
+          if (err instanceof Error && err.name === 'AbortError') {
+            return;
+          }
+          throw err;
         }
-        currentSessionId = response.session_id;
-        setSessionId(currentSessionId);
-        setMessages([]);
-        setPapers([]);
-        setSelectedPaperIds([]);
       }
 
       if (!currentSessionId) {
@@ -149,20 +158,64 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const response = await api.searchPapers(currentSessionId, query, searchMode);
-      
-      if (response.error) {
-        if (response.error.startsWith('quota_exhausted')) {
-          setError('Brain search quota exhausted. Please wait for cooldown.');
-        } else {
-          setError(response.error);
+      try {
+        const response = await api.searchPapers(currentSessionId, query, searchMode);
+        
+        if (response.error) {
+          // Check if it's a rate limit error from arXiv
+          if (response.error.includes('rate limit')) {
+            setError(response.error);
+          } else if (response.error.startsWith('quota_exhausted')) {
+            setError('Brain search quota exhausted. Please wait for cooldown.');
+          } else {
+            setError(response.error);
+          }
+          return;
         }
+        
+        setPapers(response.papers);
+        await refreshSessionInfo();
+      } catch (err: any) {
+        // Handle 404 - session expired, create new one and retry
+        if (err?.status === 404) {
+          console.log('Session 404, creating new session and retrying...');
+          
+          // Clear old session
+          localStorage.removeItem('paperstack_session_id');
+          if (currentSessionId) {
+            localStorage.removeItem(`paperstack_messages_${currentSessionId}`);
+          }
+          setSessionId(null);
+          setMessages([]);
+          
+          // Create new session
+          const newSessionResponse = await api.createSession('Research session');
+          if (newSessionResponse.error) {
+            setError('Failed to create new session');
+            return;
+          }
+          
+          currentSessionId = newSessionResponse.session_id;
+          setSessionId(currentSessionId);
+          
+          // Retry search with new session
+          const retryResponse = await api.searchPapers(currentSessionId, query, searchMode);
+          if (retryResponse.error) {
+            setError(retryResponse.error);
+            return;
+          }
+          
+          setPapers(retryResponse.papers);
+          await refreshSessionInfo();
+          return;
+        }
+        throw err;
+      }
+    } catch (err) {
+      // Silently handle AbortErrors
+      if (err instanceof Error && err.name === 'AbortError') {
         return;
       }
-      
-      setPapers(response.papers);
-      await refreshSessionInfo();
-    } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to search papers');
     } finally {
       setLoading(false);
@@ -189,7 +242,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setSelectedPaperIds([]);
       await refreshSessionInfo();
       return true;
-    } catch (err) {
+    } catch (err: any) {
+      // Handle 404 - session expired
+      if (err?.status === 404) {
+        setError('Session expired. Please search for papers again to create a new session.');
+        // Clear expired session
+        localStorage.removeItem('paperstack_session_id');
+        localStorage.removeItem(`paperstack_messages_${sessionId}`);
+        setSessionId(null);
+        setMessages([]);
+        setPapers([]);
+        setSelectedPaperIds([]);
+        return false;
+      }
       setError(err instanceof Error ? err.message : 'Failed to load papers');
       return false;
     } finally {
@@ -232,35 +297,56 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       };
       setMessages(prev => [...prev, loadingMessage]);
 
-      const response = await api.sendMessage(sessionId, message);
+      try {
+        const response = await api.sendMessage(sessionId, message);
       
-      if (response.error) {
-        // Remove loading message on error
-        setMessages(prev => prev.filter(m => m.id !== loadingMessageId));
-        
-        if (response.error.startsWith('quota_exhausted')) {
-          setError('Chat message quota exhausted. Please wait for cooldown.');
-        } else {
-          setError(response.error);
+        if (response.error) {
+          // Remove loading message on error
+          setMessages(prev => prev.filter(m => m.id !== loadingMessageId));
+          
+          if (response.error.startsWith('quota_exhausted')) {
+            setError('Chat message quota exhausted. Please wait for cooldown.');
+          } else {
+            setError(response.error);
+          }
+          return;
         }
-        return;
+      
+        // Replace loading message with actual response
+        const assistantMessage: Message = {
+          id: loadingMessageId,
+          role: 'assistant',
+          content: response.answer,  // Backend returns 'answer' not 'response'
+          thinking_steps: response.thinking_steps,
+          citations: response.citations,
+          timestamp: new Date(),
+        };
+        setMessages(prev => prev.map(m => m.id === loadingMessageId ? assistantMessage : m));
+      
+        await refreshSessionInfo();
+      } catch (err: any) {
+        // Handle 404 - session expired during chat
+        if (err?.status === 404) {
+          // Remove loading message
+          setMessages(prev => prev.filter(m => m.id !== loadingMessageId));
+          setError('Session expired. Please search and load papers again to continue chatting.');
+          // Clear expired session
+          localStorage.removeItem('paperstack_session_id');
+          localStorage.removeItem(`paperstack_messages_${sessionId}`);
+          setSessionId(null);
+          setMessages([]);
+          setPapers([]);
+          setSelectedPaperIds([]);
+          return;
+        }
+        // Remove loading message on other errors
+        setMessages(prev => prev.filter(m => m.id !== loadingMessageId));
+        // Remove loading message on other errors
+        setMessages(prev => prev.filter(m => m.id !== loadingMessageId));
+        throw err;
       }
-      
-      // Replace loading message with actual response
-      setMessages(prev => prev.map(m => 
-        m.id === loadingMessageId
-          ? {
-              ...m,
-              content: response.answer,
-              citations: response.citations,
-              thinking_steps: response.thinking_steps,
-              isLoading: false,
-            }
-          : m
-      ));
-      
-      await refreshSessionInfo();
     } catch (err) {
+      // Catch any unhandled errors
       setError(err instanceof Error ? err.message : 'Failed to send message');
     } finally {
       setLoading(false);
@@ -336,6 +422,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const clearError = () => setError(null);
 
+  const clearChat = () => {
+    // Clear messages from UI and localStorage
+    setMessages([]);
+    if (sessionId) {
+      localStorage.removeItem(`paperstack_messages_${sessionId}`);
+    }
+    // Session ID and quota remain intact
+  };
+
   return (
     <SessionContext.Provider
       value={{
@@ -355,6 +450,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         refreshSessionInfo,
         clearError,
         clearPapers,
+        clearChat,
         resetSession,
       }}
     >

@@ -21,8 +21,8 @@ def ingest_arxiv_paper(arxiv_id: str) -> Optional[List[Document]]:
     # Strip version suffix if present (e.g., "2301.12345v1" -> "2301.12345")
     clean_id = arxiv_id.split('v')[0] if 'v' in arxiv_id else arxiv_id
     
-    # Query arXiv API by ID
-    api_url = "http://export.arxiv.org/api/query"
+    # Query arXiv API by ID (use HTTPS to avoid redirect)
+    api_url = "https://export.arxiv.org/api/query"
     params = {
         'id_list': clean_id,
         'max_results': 1

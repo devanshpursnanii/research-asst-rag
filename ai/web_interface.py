@@ -20,6 +20,53 @@ from .fetcher import ingest_arxiv_paper
 from .rag import multi_paper_rag_with_documents, multi_paper_rag_with_documents_with_metrics
 from .logger import SessionLogger
 
+def arxiv_request_with_retry(url: str, params: dict, max_retries: int = 3, timeout: int = 30) -> requests.Response:
+    """
+    Make arXiv API request with retry logic for rate limiting.
+    
+    Args:
+        url: API endpoint URL
+        params: Query parameters
+        max_retries: Maximum retry attempts
+        timeout: Request timeout in seconds (increased for rate-limited requests)
+        
+    Returns:
+        Response object
+        
+    Raises:
+        requests.exceptions.HTTPError: If request fails after retries
+    """
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, params=params, timeout=timeout)
+            
+            # If rate limited (429), wait and retry
+            if response.status_code == 429:
+                wait_time = (attempt + 1) * 3  # Longer backoff: 3s, 6s, 9s
+                print(f"arXiv rate limit (429), waiting {wait_time}s before retry {attempt+1}/{max_retries}...")
+                time.sleep(wait_time)
+                continue
+            
+            response.raise_for_status()
+            return response
+            
+        except requests.exceptions.HTTPError as e:
+            if attempt == max_retries - 1:
+                raise  # Last attempt, raise the error
+            if e.response and e.response.status_code == 429:
+                wait_time = (attempt + 1) * 3
+                print(f"arXiv rate limit (429), waiting {wait_time}s before retry {attempt+1}/{max_retries}...")
+                time.sleep(wait_time)
+            else:
+                raise  # Non-429 error, raise immediately
+        except requests.exceptions.Timeout:
+            if attempt == max_retries - 1:
+                raise  # Last attempt, raise timeout
+            wait_time = (attempt + 1) * 2
+            print(f"Request timeout, waiting {wait_time}s before retry {attempt+1}/{max_retries}...")
+            time.sleep(wait_time)
+    
+    raise requests.exceptions.HTTPError("Failed after maximum retries")
 
 async def web_brain_search(query: str, search_mode: str = "topic", logger: Optional[SessionLogger] = None) -> Dict[str, Any]:
     """
@@ -98,7 +145,7 @@ OUTPUT (search string only, no explanation):"""
         # Step 2: Search arXiv with mode-based query
         thinking_steps.append({"step": "searching", "status": "in_progress", "result": None})
         
-        base_url = 'http://export.arxiv.org/api/query'
+        base_url = 'https://export.arxiv.org/api/query'  # Use HTTPS directly
         
         if search_mode == "title":
             # Title search: Use ORIGINAL query with normalization
@@ -109,7 +156,11 @@ OUTPUT (search string only, no explanation):"""
             ]
             
             feed = None
-            for search_q in search_queries:
+            for i, search_q in enumerate(search_queries):
+                # Respect arXiv rate limit: 3 requests per second
+                if i > 0:
+                    time.sleep(0.4)  # 400ms delay between requests
+                
                 params = {
                     'search_query': search_q,
                     'start': 0,
@@ -118,15 +169,25 @@ OUTPUT (search string only, no explanation):"""
                     'sortOrder': 'descending'
                 }
                 
-                response = requests.get(base_url, params=params, timeout=15)
-                response.raise_for_status()
-                feed = feedparser.parse(response.content)
-                
-                if feed.entries:
-                    break  # Found results, stop trying
+                try:
+                    response = arxiv_request_with_retry(base_url, params)
+                    feed = feedparser.parse(response.content)
+                    
+                    if feed.entries:
+                        break  # Found results, stop trying
+                except requests.exceptions.HTTPError as e:
+                    if e.response and e.response.status_code == 429:
+                        thinking_steps[-1] = {"step": "searching", "status": "error", "result": "arXiv rate limit exceeded. Please wait a moment and try again."}
+                        return {
+                            "thinking_steps": thinking_steps,
+                            "papers": [],
+                            "error": "arXiv API rate limit exceeded. Please wait 10 seconds and try again."
+                        }
+                    raise
             
             # Fallback to topic search if title search found nothing
             if not feed or not feed.entries:
+                time.sleep(0.4)  # Rate limit delay
                 thinking_steps[-1] = {"step": "searching", "status": "in_progress", "result": "No exact title match, trying broader search..."}
                 params = {
                     'search_query': f'all:{query}',
@@ -135,9 +196,17 @@ OUTPUT (search string only, no explanation):"""
                     'sortBy': 'relevance',
                     'sortOrder': 'descending'
                 }
-                response = requests.get(base_url, params=params, timeout=15)
-                response.raise_for_status()
-                feed = feedparser.parse(response.content)
+                try:
+                    response = arxiv_request_with_retry(base_url, params)
+                    feed = feedparser.parse(response.content)
+                except requests.exceptions.HTTPError as e:
+                    if e.response and e.response.status_code == 429:
+                        return {
+                            "thinking_steps": thinking_steps,
+                            "papers": [],
+                            "error": "arXiv API rate limit exceeded. Please wait 10 seconds and try again."
+                        }
+                    raise
         else:
             # Topic mode: Use semantic rewritten query
             params = {
@@ -148,9 +217,17 @@ OUTPUT (search string only, no explanation):"""
                 'sortOrder': 'descending'
             }
             
-            response = requests.get(base_url, params=params, timeout=15)
-            response.raise_for_status()
-            feed = feedparser.parse(response.content)
+            try:
+                response = arxiv_request_with_retry(base_url, params)
+                feed = feedparser.parse(response.content)
+            except requests.exceptions.HTTPError as e:
+                if e.response and e.response.status_code == 429:
+                    return {
+                        "thinking_steps": thinking_steps,
+                        "papers": [],
+                        "error": "arXiv API rate limit exceeded. Please wait 10 seconds and try again."
+                    }
+                raise
         
         if not feed.entries:
             return {
@@ -224,6 +301,31 @@ OUTPUT (search string only, no explanation):"""
             "thinking_steps": thinking_steps,
             "papers": [],
             "error": f"quota_exhausted: {e.message}"
+        }
+    except requests.exceptions.HTTPError as e:
+        # Handle specific HTTP errors with better messages
+        if e.response and e.response.status_code == 429:
+            return {
+                "thinking_steps": thinking_steps,
+                "papers": [],
+                "error": "arXiv API rate limit exceeded. Please wait 15 seconds and try again."
+            }
+        return {
+            "thinking_steps": thinking_steps,
+            "papers": [],
+            "error": f"arXiv API error: {str(e)}"
+        }
+    except requests.exceptions.Timeout:
+        return {
+            "thinking_steps": thinking_steps,
+            "papers": [],
+            "error": "arXiv API request timed out. The service might be slow. Please try again in a moment."
+        }
+    except requests.exceptions.ConnectionError:
+        return {
+            "thinking_steps": thinking_steps,
+            "papers": [],
+            "error": "Could not connect to arXiv API. Please check your internet connection."
         }
     except Exception as e:
         return {

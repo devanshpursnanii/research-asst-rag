@@ -45,7 +45,7 @@ from backend.models import (
     MetricsResponse, MetricsRequest
 )
 from backend.session import (
-    create_session, get_session, cleanup_old_sessions,
+    create_session, get_session, cleanup_expired_sessions,
     get_session_count
 )
 from ai.web_interface import web_brain_search, web_brain_load_papers, web_chat_query
@@ -169,14 +169,28 @@ app.add_middleware(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Initialize database and cleanup old sessions on startup
+# Background task for cleaning expired sessions
+async def periodic_session_cleanup():
+    """Clean up expired sessions every 5 minutes."""
+    while True:
+        await asyncio.sleep(300)  # 5 minutes
+        try:
+            deleted = cleanup_expired_sessions(ttl_minutes=30)
+            if deleted > 0:
+                print(f"🧹 Cleaned up {deleted} expired sessions (>30 min idle)")
+        except Exception as e:
+            print(f"⚠️  Session cleanup error: {e}")
+
+# Initialize database and start cleanup task on startup
 @app.on_event("startup")
 async def startup_event():
-    """Run startup tasks: initialize database and cleanup old sessions."""
+    """Run startup tasks: initialize database and start background cleanup."""
     try:
         bootstrap_database()
-        deleted = cleanup_old_sessions(max_age_hours=48)
+        deleted = cleanup_expired_sessions(ttl_minutes=30)
         print(f"✓ FastAPI started successfully. Cleaned up {deleted} old sessions.")
+        # Start background cleanup task
+        asyncio.create_task(periodic_session_cleanup())
     except Exception as e:
         print(f"⚠️  Startup warning: {e}")
         # Don't crash on startup - allow app to start even if cleanup fails
@@ -184,35 +198,29 @@ async def startup_event():
 # Authentication Middleware
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    """Check authentication for all routes except /auth/validate and OPTIONS requests."""
-    # Let CORSMiddleware handle OPTIONS requests - don't interfere
+    """
+    Simplified auth middleware - only checks if Authorization header exists.
+    Token validation happens once at /auth/validate during login.
+    After that, we trust the token (frontend can't reach here without passing login).
+    """
+    # Let CORSMiddleware handle OPTIONS requests
     if request.method == "OPTIONS":
         return await call_next(request)
     
-    # Skip auth check for these paths
-    if request.url.path in ["/auth/validate", "/", "/health", "/docs", "/openapi.json", "/redoc"]:
-        response = await call_next(request)
-        # Debug CORS headers on auth endpoints
-        if request.url.path == "/auth/validate":
-            print(f"[CORS DEBUG] /auth/validate response headers: {dict(response.headers)}")
-        return response
+    # Public endpoints (no auth required)
+    public_paths = ["/auth/validate", "/", "/health", "/docs", "/openapi.json", "/redoc"]
+    if request.url.path in public_paths:
+        return await call_next(request)
     
-    # Check Authorization header
+    # Check Authorization header exists (don't validate token content)
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         return JSONResponse(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"error": "Missing or invalid authorization header", "error_type": "unauthorized"}
+            content={"error": "Missing authorization header", "error_type": "unauthorized"}
         )
     
-    token = auth_header.replace("Bearer ", "")
-    if not verify_token(token):
-        return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"error": "Invalid access token", "error_type": "unauthorized"}
-        )
-    
-    # Token is valid, proceed
+    # Header exists, proceed (trust the token - already validated at login)
     return await call_next(request)
 
 

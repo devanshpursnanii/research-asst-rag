@@ -73,6 +73,11 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> 
 
     return await response.json();
   } catch (error) {
+    // Silently ignore AbortErrors (user navigated away or component unmounted)
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw error; // Throw but don't log
+    }
+    
     // Only log non-404 errors
     if (error instanceof APIError && error.status !== 404) {
       console.error('API request failed:', error.message);

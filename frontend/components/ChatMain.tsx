@@ -11,6 +11,7 @@ export default function ChatMain() {
     messages,
     loading,
     sendMessage,
+    clearChat,
     resetSession,
   } = useSession();
 
@@ -53,15 +54,15 @@ export default function ChatMain() {
           </div>
           {messages.length > 0 && (
             <button
-              onClick={async () => {
-                if (confirm('Clear all messages and start new session?')) {
-                  await resetSession();
+              onClick={() => {
+                if (confirm('Clear chat messages? (Session and limits remain intact)')) {
+                  clearChat();
                 }
               }}
               className="px-3 py-1.5 text-xs font-medium text-gray-700 hover:text-gray-900 border-2 border-gray-300 hover:border-gray-400 rounded-lg transition-all mr-2"
-              title="Clear chat and start over"
+              title="Clear chat messages only"
             >
-              Clear
+              Clear Chat
             </button>
           )}
           <div className="flex-shrink-0">
@@ -202,7 +203,7 @@ export default function ChatMain() {
                   </div>
                 ) : (
                   <div className="text-sm whitespace-pre-wrap break-words">
-                    {message.content.split('\n').map((line, i) => {
+                    {(message.content || '').split('\n').map((line, i) => {
                       // Handle bullet points
                       if (line.trim().startsWith('•') || line.trim().startsWith('-')) {
                         return (

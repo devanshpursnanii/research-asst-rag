@@ -42,7 +42,18 @@ class Session:
     # Metadata
     created_at: datetime = field(default_factory=datetime.now)
     last_activity: datetime = field(default_factory=datetime.now)
+    last_accessed: datetime = field(default_factory=datetime.now)
     initial_query: str = ""
+    
+    def touch(self):
+        """Update last accessed time to extend TTL."""
+        self.last_accessed = datetime.now()
+        self.last_activity = datetime.now()
+    
+    def is_expired(self, ttl_minutes: int = 30) -> bool:
+        """Check if session has exceeded TTL since last access."""
+        elapsed = (datetime.now() - self.last_accessed).total_seconds()
+        return elapsed > (ttl_minutes * 60)
 
 
 # Global in-memory session store
@@ -80,38 +91,48 @@ def create_session(initial_query: str = "New Session") -> Session:
     return session
 
 
-def get_session(session_id: str) -> Optional[Session]:
+def get_session(session_id: str, ttl_minutes: int = 30) -> Optional[Session]:
     """
-    Get session by ID.
+    Get session by ID with TTL expiry check.
     
     Args:
         session_id: Session UUID
+        ttl_minutes: Time-to-live in minutes (default 30)
         
     Returns:
-        Session object or None if not found
+        Session object, None if not found, or None if expired (also deletes it)
     """
     session = sessions.get(session_id)
     
-    if session:
-        # Update last activity
-        session.last_activity = datetime.now()
+    if not session:
+        return None
+    
+    # Check if expired
+    if session.is_expired(ttl_minutes):
+        # Clean up expired session
+        delete_session(session_id)
+        return None
+    
+    # Update last accessed time
+    session.touch()
     
     return session
 
 
-def cleanup_old_sessions(max_age_hours: int = 24):
+def cleanup_expired_sessions(ttl_minutes: int = 30):
     """
-    Remove sessions older than max_age_hours.
+    Remove sessions that have exceeded TTL since last access.
     
     Args:
-        max_age_hours: Maximum session age in hours
+        ttl_minutes: Time-to-live in minutes (default 30)
+        
+    Returns:
+        Number of sessions cleaned up
     """
-    now = datetime.now()
     to_delete = []
     
     for session_id, session in sessions.items():
-        age = now - session.created_at
-        if age.total_seconds() > max_age_hours * 3600:
+        if session.is_expired(ttl_minutes):
             # Save logs before deletion
             try:
                 session.logger.save_session()

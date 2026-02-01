@@ -1,6 +1,25 @@
-import { Github, FileText, Info, ScrollText } from 'lucide-react';
+'use client';
+
+import { Github, FileText, Info, ScrollText, LogOut } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 
 export default function Header() {
+  const router = useRouter();
+
+  const handleLogout = () => {
+    // Clear all auth and session data
+    localStorage.removeItem('paperstack_token');
+    localStorage.removeItem('paperstack_session_id');
+    
+    // Clear all message stores
+    Object.keys(localStorage)
+      .filter(key => key.startsWith('paperstack_messages_'))
+      .forEach(key => localStorage.removeItem(key));
+    
+    // Redirect to login
+    router.push('/');
+  };
+
   return (
     <header className="border-b border-gray-200 bg-white px-6 py-4">
       <div className="flex items-center justify-between relative">
@@ -26,19 +45,26 @@ export default function Header() {
             <span>GitHub</span>
           </a>
           <a
-            href="/logs"
+            href="/app/logs"
             className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
           >
             <ScrollText className="h-4 w-4" />
             <span>Logs</span>
           </a>
           <a
-            href="/about"
+            href="/app/about"
             className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
           >
             <Info className="h-4 w-4" />
             <span>About</span>
           </a>
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+          >
+            <LogOut className="h-4 w-4" />
+            <span>Logout</span>
+          </button>
         </nav>
       </div>
     </header>
