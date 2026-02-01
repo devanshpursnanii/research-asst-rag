@@ -150,13 +150,13 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:3001",
         "http://127.0.0.1:3000",
-        "http://192.168.0.101:3000",  # Current network IP
-        "http://192.168.0.104:3000",  # Local network
+        "http://192.168.0.101:3000",
+        "http://192.168.0.104:3000",
         "http://192.168.0.106:3000",
         "http://192.168.0.107:3000",
-        "https://paperstack.vercel.app",  # Production frontend
-        "https://paperstack-roan.vercel.app",  # Actual Vercel deployment
-        "https://paperstack-production.up.railway.app",  # If using Railway
+        "https://paperstack.vercel.app",
+        "https://paperstack-roan.vercel.app",
+        "https://paperstack-git-main-devanshpursnaniis-projects.vercel.app",  # Vercel git branch
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],

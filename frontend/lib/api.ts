@@ -30,7 +30,7 @@ function handleUnauthorized() {
   window.location.reload();
 }
 
-async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
+async function fetchAPI<T>(endpoint: string, options?: RequestInit, timeout: number = 300000): Promise<T> {
   try {
     const token = getToken();
     const headers: Record<string, string> = {
@@ -49,17 +49,29 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> 
       ...(options?.headers as Record<string, string> || {}),
     };
 
+    // Create abort controller for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
     const response = await fetch(`${API_BASE_URL}${endpoint}`, {
       ...options,
       mode: 'cors',
       credentials: 'include',
       headers: finalHeaders,
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     // Handle 401 Unauthorized
     if (response.status === 401) {
       handleUnauthorized();
       throw new APIError(401, 'Unauthorized - please log in again');
+    }
+
+    // Handle 502 Bad Gateway (worker timeout/restart)
+    if (response.status === 502) {
+      throw new APIError(502, 'Server is processing your request. Please try again in a moment.');
     }
 
     if (!response.ok) {

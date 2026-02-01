@@ -197,9 +197,14 @@ export default function ChatMain() {
                   <ThinkingSteps steps={message.thinking_steps} />
                 )}
                 {message.isLoading ? (
-                  <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Generating response...</span>
+                  <div className="flex flex-col gap-2 py-2">
+                    <div className="flex items-center gap-2 text-sm text-gray-500">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>Generating response...</span>
+                    </div>
+                    <p className="text-xs text-gray-400">
+                      This may take 1-2 minutes for complex queries
+                    </p>
                   </div>
                 ) : (
                   <div className="text-sm whitespace-pre-wrap break-words">

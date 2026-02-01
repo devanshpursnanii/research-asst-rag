@@ -325,6 +325,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       
         await refreshSessionInfo();
       } catch (err: any) {
+        // Handle 502 - worker timeout/restart
+        if (err?.status === 502) {
+          setMessages(prev => prev.filter(m => m.id !== loadingMessageId));
+          setError('Server is busy processing your request. Please try again in a moment.');
+          return;
+        }
+        
         // Handle 404 - session expired during chat
         if (err?.status === 404) {
           // Remove loading message
@@ -339,8 +346,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           setSelectedPaperIds([]);
           return;
         }
-        // Remove loading message on other errors
-        setMessages(prev => prev.filter(m => m.id !== loadingMessageId));
+        
         // Remove loading message on other errors
         setMessages(prev => prev.filter(m => m.id !== loadingMessageId));
         throw err;
