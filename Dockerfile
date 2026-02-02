@@ -32,6 +32,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
 
 # Run with gunicorn for production (use Render's $PORT)
+# Fixed session race condition - using refs for synchronous sessionId access
 CMD cd backend && gunicorn main:app \
     -w 2 \
     -k uvicorn.workers.UvicornWorker \

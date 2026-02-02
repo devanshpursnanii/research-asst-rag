@@ -156,7 +156,9 @@ app.add_middleware(
         "http://192.168.0.107:3000",
         "https://paperstack.vercel.app",
         "https://paperstack-roan.vercel.app",
-        "https://paperstack-git-main-devanshpursnaniis-projects.vercel.app",  # Vercel git branch
+        "https://paperstack-git-main-devanshpursnaniis-projects.vercel.app",
+        "https://paperstack-333op0j2e-devansh-pursnani-s-projects.vercel.app",
+        "https://paperstack-333op0j2e-devanshpursnaniis-projects.vercel.app",  # Alternative domain format
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
